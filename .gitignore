@@ -1,0 +1,16 @@
+# Apache ve PHP geçici dosyaları
+.apache-runtime/
+*.log
+*.pid
+*.sock
+
+# Editör dosyaları (VSCode vb.)
+.vscode/
+.idea/
+.DS_Store
+
+# Diğer gereksizler
+result
+
+# Proje içinde geçerli olan çevre değişkenleri
+.env
