@@ -8,6 +8,9 @@ let
   projectDir = toString ./.;
   runtimeDir = "${projectDir}/.apache-runtime";
 
+  # Cloudflare tünel bağlantısı
+  myTunnel = pkgs.callPackage ./tunnel.nix {};
+
   # PHP Yapılandırması
   myPhp = pkgs.php.withExtensions ({ enabled, all }: enabled ++ [ 
     all.pdo_pgsql 
@@ -78,6 +81,7 @@ in pkgs.mkShell {
     pkgs.apacheHttpd 
     pkgs.glibcLocales  
     myPhp
+    myTunnel
   ];
 
   # Dil ayarını "C" veya İngilizce'ye zorluyoruz.
@@ -94,6 +98,9 @@ in pkgs.mkShell {
       echo "Eski süreçler temizleniyor..."
       pkill -F ${runtimeDir}/php-fpm.pid 2>/dev/null || true
       
+      # connect-db komutu tunnel.nix'ten geliyor
+      connect-db start
+    
       echo "PHP-FPM başlatılıyor..."
       ${myPhp}/bin/php-fpm -y ${myPhpFpmConf}
       
