@@ -49,29 +49,7 @@ $exams = $stmtExams->fetchAll();
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
-    if ($action === 'update_course_info') {
-        // Ders bilgileri güncelleme
-        $courseName = trim($_POST['course_name'] ?? '');
-        $year = trim($_POST['year'] ?? '');
-        $term = trim($_POST['term'] ?? '');
-
-        if (empty($courseName)) {
-            $message = 'Ders adı zorunludur.';
-            $messageType = 'error';
-        } else {
-            try {
-                $updateStmt = $pdo->prepare('UPDATE "Opened_Courses" SET "CourseName" = :courseName, "Year" = :year, "Term" = :term WHERE "CourseOpenID" = :courseId');
-                $updateStmt->execute(['courseName' => $courseName, 'year' => $year, 'term' => $term, 'courseId' => $courseId]);
-                $message = 'Ders bilgileri güncellendi!';
-                $messageType = 'success';
-                $stmt->execute(['courseId' => $courseId, 'instructorId' => $instructorId]);
-                $course = $stmt->fetch();
-            } catch (PDOException $e) {
-                $message = 'Hata: ' . $e->getMessage();
-                $messageType = 'error';
-            }
-        }
-    } elseif ($action === 'update_resources') {
+    if ($action === 'update_resources') {
         // Kaynak güncelleme
         $resources = trim($_POST['resources'] ?? '');
         try {
@@ -582,35 +560,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .btn-cancel:hover {
             background: #ddd;
         }
-
-        .header-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .form-group input[type="text"] {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e1e1e1;
-            border-radius: 8px;
-            font-size: 14px;
-            transition: border-color 0.3s, box-shadow 0.3s;
-        }
-
-        .form-group input[type="text"]:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
-        }
     </style>
     <script>
         function toggleEditForm(examId) {
             const form = document.getElementById('edit-form-' + examId);
-            form.style.display = form.style.display === 'none' ? 'block' : 'none';
-        }
-        function toggleCourseEdit() {
-            const form = document.getElementById('course-edit-form');
             form.style.display = form.style.display === 'none' ? 'block' : 'none';
         }
     </script>
@@ -630,13 +583,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endif; ?>
 
         <div class="course-header">
-            <div class="header-row">
-                <h2>
-                    <?= htmlspecialchars($course['CourseCode']) ?> -
-                    <?= htmlspecialchars($course['CourseName']) ?>
-                </h2>
-                <button type="button" class="btn-icon btn-edit" onclick="toggleCourseEdit()">✏️</button>
-            </div>
+            <h2>
+                <?= htmlspecialchars($course['CourseCode']) ?> -
+                <?= htmlspecialchars($course['CourseName']) ?>
+            </h2>
             <div class="course-meta">
                 <span class="meta-item">📅
                     <?= htmlspecialchars($course['Year'] . ' ' . $course['Term']) ?>
@@ -647,38 +597,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <span class="meta-item">📖
                     <?= htmlspecialchars($course['Program'] ?? '-') ?>
                 </span>
-            </div>
-
-            <!-- Ders Bilgileri Düzenleme Formu -->
-            <div id="course-edit-form" class="edit-form" style="display:none">
-                <form method="POST">
-                    <input type="hidden" name="action" value="update_course_info">
-                    <div class="form-row">
-                        <div class="form-group" style="flex:2">
-                            <label>Ders Adı *</label>
-                            <input type="text" name="course_name" value="<?= htmlspecialchars($course['CourseName']) ?>"
-                                required>
-                        </div>
-                        <div class="form-group half">
-                            <label>Yıl</label>
-                            <input type="text" name="year" value="<?= htmlspecialchars($course['Year'] ?? '') ?>"
-                                placeholder="2025">
-                        </div>
-                        <div class="form-group half">
-                            <label>Dönem</label>
-                            <select name="term">
-                                <option value="Güz" <?= ($course['Term'] ?? '') === 'Güz' ? 'selected' : '' ?>>Güz</option>
-                                <option value="Bahar" <?= ($course['Term'] ?? '') === 'Bahar' ? 'selected' : '' ?>>Bahar
-                                </option>
-                                <option value="Yaz" <?= ($course['Term'] ?? '') === 'Yaz' ? 'selected' : '' ?>>Yaz</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="edit-actions">
-                        <button type="submit" class="btn-save-sm">💾 Kaydet</button>
-                        <button type="button" class="btn-cancel" onclick="toggleCourseEdit()">İptal</button>
-                    </div>
-                </form>
             </div>
         </div>
 
