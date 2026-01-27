@@ -33,7 +33,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute(['username' => $username]);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-                if ($user && $user['Password'] === $password) {
+                if ($user && password_verify($password, $user['Password'])) {
                     // Giriş başarılı
                     $_SESSION['logged_in'] = true;
                     $_SESSION['username'] = $username;
