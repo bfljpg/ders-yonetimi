@@ -595,3 +595,117 @@ body.login-page {
     text-align: center;
     padding: 24px;
 }
+
+/* ============================================
+   Students Table
+   ============================================ */
+.table-responsive {
+    overflow-x: auto;
+}
+
+.students-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+
+.students-table th,
+.students-table td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.students-table th {
+    background: #f8f9fa;
+    font-weight: 600;
+    color: #555;
+    font-size: 12px;
+    text-transform: uppercase;
+}
+
+.students-table tbody tr:hover {
+    background: #f8f9fa;
+}
+
+.student-name {
+    font-weight: 500;
+    color: #333;
+}
+
+.student-email {
+    font-size: 12px;
+    color: #888;
+}
+
+.letter-grade {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 12px;
+}
+
+.status-badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.status-badge.success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-badge.fail {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* Grade Form Row */
+.grade-form-row {
+    background: #f8f9fa;
+}
+
+.grade-form-row td {
+    padding: 16px;
+}
+
+.inline-grade-form {
+    display: block;
+}
+
+.grade-inputs {
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.grade-input {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.grade-input label {
+    font-size: 12px;
+    color: #666;
+    font-weight: 500;
+}
+
+.grade-input input {
+    width: 100px;
+    padding: 8px 12px;
+    border: 2px solid #e1e1e1;
+    border-radius: 6px;
+    font-size: 14px;
+    text-align: center;
+}
+
+.grade-input input:focus {
+    outline: none;
+    border-color: #667eea;
+}

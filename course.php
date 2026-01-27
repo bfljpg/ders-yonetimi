@@ -45,6 +45,17 @@ $stmtExams = $pdo->prepare('SELECT * FROM "Exams" WHERE "CourseOpenID" = :course
 $stmtExams->execute(['courseId' => $courseId]);
 $exams = $stmtExams->fetchAll();
 
+// Derse kayıtlı öğrencileri çek
+$stmtEnrolled = $pdo->prepare('
+    SELECT cg.*, s."FullName", s."Email" 
+    FROM "Course_Grades" cg 
+    JOIN "Students" s ON cg."StudentID" = s."StudentID" 
+    WHERE cg."CourseOpenID" = :courseId 
+    ORDER BY s."FullName"
+');
+$stmtEnrolled->execute(['courseId' => $courseId]);
+$enrolledStudents = $stmtEnrolled->fetchAll();
+
 // Form gönderildiğinde
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -176,6 +187,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $messageType = 'error';
             }
         }
+    } elseif ($action === 'update_grades') {
+        // Not güncelleme
+        $enrollmentId = $_POST['enrollment_id'] ?? null;
+        $finalGrade = $_POST['final_grade'] ?? null;
+
+        if ($enrollmentId) {
+            try {
+                $updateStmt = $pdo->prepare('
+                    UPDATE "Course_Grades" 
+                    SET "FinalGrade" = :finalGrade
+                    WHERE "EnrollmentID" = :enrollmentId AND "CourseOpenID" = :courseId
+                ');
+                $updateStmt->execute([
+                    'finalGrade' => $finalGrade !== '' ? $finalGrade : null,
+                    'enrollmentId' => $enrollmentId,
+                    'courseId' => $courseId
+                ]);
+                $message = 'Notlar güncellendi!';
+                $messageType = 'success';
+                $stmtEnrolled->execute(['courseId' => $courseId]);
+                $enrolledStudents = $stmtEnrolled->fetchAll();
+            } catch (PDOException $e) {
+                $message = 'Güncelleme hatası: ' . $e->getMessage();
+                $messageType = 'error';
+            }
+        }
     }
 }
 ?>
@@ -193,6 +230,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         function toggleEditForm(examId) {
             const form = document.getElementById('edit-form-' + examId);
             form.style.display = form.style.display === 'none' ? 'block' : 'none';
+        }
+        function toggleGradeForm(enrollmentId) {
+            const row = document.getElementById('grade-form-' + enrollmentId);
+            row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
         }
     </script>
 </head>
@@ -382,6 +423,70 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 <button type="submit" class="btn-save">➕ Sınav Ekle</button>
             </form>
+        </div>
+
+        <!-- Öğrenci Listesi -->
+        <div class="card">
+            <h3>👥 Öğrenci Listesi (<?= count($enrolledStudents) ?> Öğrenci)</h3>
+
+            <?php if (count($enrolledStudents) > 0): ?>
+                <div class="table-responsive">
+                    <table class="students-table">
+                        <thead>
+                            <tr>
+                                <th>Öğrenci Adı</th>
+                                <th>Final</th>
+                                <th>Harf</th>
+                                <th>İşlem</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($enrolledStudents as $student): ?>
+                                <tr>
+                                    <td>
+                                        <div class="student-name"><?= htmlspecialchars($student['FullName']) ?></div>
+                                        <div class="student-email"><?= htmlspecialchars($student['Email'] ?? '') ?></div>
+                                    </td>
+                                    <td><?= isset($student['FinalGrade']) && $student['FinalGrade'] !== null ? $student['FinalGrade'] : '-' ?>
+                                    </td>
+                                    <td>
+                                        <?php if ($student['LetterGrade']): ?>
+                                            <span class="letter-grade"><?= htmlspecialchars($student['LetterGrade']) ?></span>
+                                        <?php else: ?>
+                                            -
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <button type="button" class="btn-icon btn-edit"
+                                            onclick="toggleGradeForm(<?= $student['EnrollmentID'] ?>)">✏️</button>
+                                    </td>
+                                </tr>
+                                <!-- Not Düzenleme Formu -->
+                                <tr class="grade-form-row" id="grade-form-<?= $student['EnrollmentID'] ?>" style="display:none">
+                                    <td colspan="4">
+                                        <form method="POST" class="inline-grade-form">
+                                            <input type="hidden" name="action" value="update_grades">
+                                            <input type="hidden" name="enrollment_id" value="<?= $student['EnrollmentID'] ?>">
+                                            <div class="grade-inputs">
+                                                <div class="grade-input">
+                                                    <label>Final</label>
+                                                    <input type="number" name="final_grade" min="0" max="100"
+                                                        value="<?= $student['FinalGrade'] ?? '' ?>">
+                                                </div>
+                                                <button type="submit" class="btn-save-sm">💾 Kaydet</button>
+                                                <button type="button" class="btn-cancel"
+                                                    onclick="toggleGradeForm(<?= $student['EnrollmentID'] ?>)">İptal</button>
+                                            </div>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php else: ?>
+                <p class="no-data">Bu derse kayıtlı öğrenci bulunmuyor.</p>
+            <?php endif; ?>
         </div>
 
         <div class="card">
