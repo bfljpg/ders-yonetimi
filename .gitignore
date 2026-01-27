@@ -14,3 +14,6 @@ result
 
 # Proje içinde geçerli olan çevre değişkenleri
 .env
+
+# Hash çevirici PHP dosyası
+hash_passwords.php  
