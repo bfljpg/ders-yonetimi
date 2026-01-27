@@ -28,7 +28,7 @@ $instructorName = $instructor['FullName'] ?? $username;
 $stmt = $pdo->prepare('
     SELECT 
         oc.*,
-        (SELECT COUNT(*) FROM "Course_Grades" cg WHERE cg."CourseOpenID" = oc."CourseOpenID") as ogrenci_sayisi
+        (SELECT COUNT(*) FROM "Enrollments" cg WHERE cg."CourseOpenID" = oc."CourseOpenID") as ogrenci_sayisi
     FROM "Opened_Courses" oc
     WHERE oc."InstructorID" = :instructorId
     ORDER BY oc."Year" DESC, oc."Term" DESC, oc."CourseCode" ASC
