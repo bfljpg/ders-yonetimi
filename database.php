@@ -20,10 +20,45 @@ try {
         echo "<h1>Başarılı! 🎉</h1>";
         echo "<p>Apache üzerinden PHP ile PostgreSQL sunucusuna bağlandın.</p>";
 
-        // Örnek: Veritabanı sürümünü çekelim
-        $stmt = $pdo->query('SELECT version()');
-        $version = $stmt->fetchColumn();
-        echo "<pre>Veritabanı Sürümü: $version</pre>";
+        // DersBilgileri tablosundan ilk 10 satırı çekelim
+        $stmt = $pdo->query('SELECT * FROM "DersBilgileri" LIMIT 10');
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (count($rows) > 0) {
+            // Sütun başlıklarını al
+            $columns = array_keys($rows[0]);
+
+            echo "<h2>DersBilgileri Tablosu (İlk 10 Satır)</h2>";
+            echo "<style>
+                table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+                th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+                th { background-color: #4CAF50; color: white; }
+                tr:nth-child(even) { background-color: #f2f2f2; }
+                tr:hover { background-color: #ddd; }
+            </style>";
+
+            echo "<table>";
+
+            // Tablo başlıkları
+            echo "<tr>";
+            foreach ($columns as $col) {
+                echo "<th>" . htmlspecialchars($col) . "</th>";
+            }
+            echo "</tr>";
+
+            // Tablo verileri
+            foreach ($rows as $row) {
+                echo "<tr>";
+                foreach ($row as $value) {
+                    echo "<td>" . htmlspecialchars($value ?? '') . "</td>";
+                }
+                echo "</tr>";
+            }
+
+            echo "</table>";
+        } else {
+            echo "<p>DersBilgileri tablosunda veri bulunamadı.</p>";
+        }
     }
 } catch (PDOException $e) {
     echo "<h1>Hata! 💥</h1>";
