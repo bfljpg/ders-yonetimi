@@ -515,7 +515,10 @@ foreach ($rawAllResults as $res) {
                                     <?php foreach ($enrolledStudents as $student): ?>
                                             <tr>
                                                 <td>
-                                                    <div class="student-name"><?= htmlspecialchars($student['FullName']) ?></div>
+                                                    <div class="student-name">
+                                                <?= htmlspecialchars($student['FullName']) ?>
+                                                <span style="font-size: 0.85em; color: #666; font-weight: normal;">(<?= $student['StudentID'] ?>)</span>
+                                            </div>
                                                     <div class="student-email"><?= htmlspecialchars($student['Email'] ?? '') ?></div>
                                                 </td>
                                         <?php foreach ($exams as $exam):
