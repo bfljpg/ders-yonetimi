@@ -354,9 +354,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $importCount = 0;
-                $errorCount = 0;
-                $createdStudents = 0;
-                $skippedStudents = []; // Atlanan öğrencilerin listesi
+                $skippedStudents = []; // Atlanan öğrencilerin listesi (derste kayıtlı olmayan)
+
+                // Bu sınavın mevcut tüm sonuçlarını sil (sıfırdan başla)
+                $deleteResults = $pdo->prepare('
+                    DELETE FROM "Exam_Results" 
+                    WHERE "ExamID" = :examId 
+                    AND "EnrollmentID" IN (
+                        SELECT "EnrollmentID" FROM "Enrollments" WHERE "CourseOpenID" = :courseId
+                    )
+                ');
+                $deleteResults->execute(['examId' => $examId, 'courseId' => $courseId]);
 
                 // Veri satırlarını işle (ilk satır hariç)
                 for ($rowIndex = 1; $rowIndex < count($rows); $rowIndex++) {
@@ -380,33 +388,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $enrollment = $findEnrollment->fetch();
 
                     if (!$enrollment) {
-                        // Öğrenci derste kayıtlı değil, yeni kayıt oluştur
-                        if (!empty($studentName)) {
-                            // Öğrenci sistemde var mı?
-                            $checkStudent = $pdo->prepare('SELECT "StudentID" FROM "Students" WHERE "StudentID" = :studentId');
-                            $checkStudent->execute(['studentId' => $studentId]);
-                            $existingStudent = $checkStudent->fetch();
-
-                            if (!$existingStudent) {
-                                // Öğrenciyi oluştur
-                                $insertStudent = $pdo->prepare('INSERT INTO "Students" ("StudentID", "FullName") VALUES (:studentId, :fullName)');
-                                $insertStudent->execute(['studentId' => $studentId, 'fullName' => $studentName]);
-                            }
-
-                            // Derse kaydet
-                            $insertEnrollment = $pdo->prepare('INSERT INTO "Enrollments" ("StudentID", "CourseOpenID") VALUES (:studentId, :courseId)');
-                            $insertEnrollment->execute(['studentId' => $studentId, 'courseId' => $courseId]);
-
-                            // EnrollmentID'yi al
-                            $findEnrollment->execute(['studentId' => $studentId, 'courseId' => $courseId]);
-                            $enrollment = $findEnrollment->fetch();
-                            $createdStudents++;
-                        } else {
-                            // İsim yok, atlıyoruz
-                            $skippedStudents[] = $studentId . ' (isim eksik)';
-                            $errorCount++;
-                            continue;
-                        }
+                        // Öğrenci derste kayıtlı değil - hata olarak ekle, ekleme yapma
+                        $skippedStudents[] = $studentId . ' - ' . ($studentName ?: '(isim yok)');
+                        continue;
                     }
 
                     $enrollmentId = $enrollment['EnrollmentID'];
@@ -460,12 +444,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $importCount++;
                 }
 
-                $message = "{$importCount} öğrencinin notu başarıyla import edildi.";
-                if ($createdStudents > 0) {
-                    $message .= " ({$createdStudents} yeni öğrenci derse kaydedildi.)";
-                }
-                if ($errorCount > 0 && count($skippedStudents) > 0) {
-                    $message .= " Atlanan öğrenciler: " . implode(', ', $skippedStudents);
+                $message = "{$importCount} öğrencinin notu başarıyla import edildi. (Önceki notlar sıfırlandı.)";
+                if (count($skippedStudents) > 0) {
+                    $message .= " Derste kayıtlı olmayan öğrenciler atlandı: " . implode(', ', $skippedStudents);
                 }
                 $messageType = 'success';
 
