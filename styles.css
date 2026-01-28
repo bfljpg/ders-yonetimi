@@ -234,7 +234,8 @@ body.login-page {
 .info-row {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
+    gap: 12px;
 }
 
 .student-count {
@@ -320,12 +321,20 @@ body.login-page {
     font-size: 12px;
     text-transform: uppercase;
     margin-bottom: 4px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    /* flex-start olduğu için hafif aşağı alalım */
 }
 
 .info-value {
     color: #333;
     font-weight: 500;
     font-size: 16px;
+    text-align: right;
+    flex: 1;
+    /* Boşluğu doldur */
+    word-break: break-word;
+    /* Çok uzun kelimeleri kır */
 }
 
 /* ============================================
