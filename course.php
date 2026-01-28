@@ -497,6 +497,9 @@ foreach ($rawAllResults as $res) {
                                 <thead>
                                     <tr>
                                         <th>Öğrenci Adı</th>
+                                        <?php foreach ($exams as $exam): ?>
+                                            <th><?= htmlspecialchars($exam['ExamType']) ?></th>
+                                        <?php endforeach; ?>
                                         <th>Final</th>
                                         <th>Harf</th>
                                         <th>İşlem</th>
@@ -509,8 +512,24 @@ foreach ($rawAllResults as $res) {
                                                     <div class="student-name"><?= htmlspecialchars($student['FullName']) ?></div>
                                                     <div class="student-email"><?= htmlspecialchars($student['Email'] ?? '') ?></div>
                                                 </td>
-                                                <td><?= isset($student['FinalGrade']) && $student['FinalGrade'] !== null ? $student['FinalGrade'] : '-' ?>
-                                                </td>
+                                        <?php foreach ($exams as $exam):
+                                            $examId = $exam['ExamID'];
+                                            $results = $allResults[$student['EnrollmentID']][$examId] ?? [];
+                                            $totalScore = 0;
+                                            $hasScore = false;
+                                            for($k=1; $k<=20; $k++) {
+                                                if(isset($results["Q{$k}"]) && $results["Q{$k}"] !== null) {
+                                                    $totalScore += $results["Q{$k}"];
+                                                    $hasScore = true;
+                                                }
+                                            }
+                                        ?>
+                                            <td style="text-align: center;">
+                                                <?= $hasScore ? $totalScore : '-' ?>
+                                            </td>
+                                        <?php endforeach; ?>
+                                        <td><?= isset($student['FinalGrade']) && $student['FinalGrade'] !== null ? $student['FinalGrade'] : '-' ?>
+                                        </td>
                                                 <td>
                                                     <?php if ($student['LetterGrade']): ?>
                                                             <span class="letter-grade"><?= htmlspecialchars($student['LetterGrade']) ?></span>
@@ -525,7 +544,7 @@ foreach ($rawAllResults as $res) {
                                             </tr>
                                             <!-- Not Düzenleme (Genel) -->
                                             <tr class="grade-form-row" id="grade-form-<?= $student['EnrollmentID'] ?>" style="display:none">
-                                                <td colspan="4">
+                                        <td colspan="<?= count($exams) + 4 ?>">
                                                 <form method="POST" class="inline-grade-form">
                                                     <input type="hidden" name="action" value="update_student_grades">
                                                     <input type="hidden" name="enrollment_id" value="<?= $student['EnrollmentID'] ?>">
