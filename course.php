@@ -193,6 +193,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($enrollmentId) {
             try {
+                // Güvenlik: Bu enrollmentId gerçekten şuan düzenlenen derse mi ait?
+                $securityCheck = $pdo->prepare('SELECT "CourseOpenID" FROM "Enrollments" WHERE "EnrollmentID" = :eid');
+                $securityCheck->execute(['eid' => $enrollmentId]);
+                $securityInfo = $securityCheck->fetch();
+
+                if (!$securityInfo || $securityInfo['CourseOpenID'] != $courseId) {
+                     throw new Exception('Bu öğrenci notunu düzenleme yetkiniz yok (IDOR Koruması).');
+                }
                 // Gelen veriler: scores[EXAM_ID][q][QUESTION_NUMBER] = POINT
                 $incomingScores = $_POST['scores'] ?? [];
 
