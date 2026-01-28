@@ -202,7 +202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $securityInfo = $securityCheck->fetch();
 
                 if (!$securityInfo || $securityInfo['CourseOpenID'] != $courseId) {
-                     throw new Exception('Bu öğrenci notunu düzenleme yetkiniz yok (IDOR Koruması).');
+                    throw new Exception('Bu öğrenci notunu düzenleme yetkiniz yok (IDOR Koruması).');
                 }
                 // Gelen veriler: scores[EXAM_ID][q][QUESTION_NUMBER] = POINT
                 $incomingScores = $_POST['scores'] ?? [];
@@ -268,42 +268,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif ($action === 'import_grades') {
         // CSV/Excel'den not import etme
         $examId = $_POST['exam_id'] ?? null;
-        
+
         if ($examId && isset($_FILES['grades_file']) && $_FILES['grades_file']['error'] === UPLOAD_ERR_OK) {
             try {
                 // Sınavın bu derse ait olduğunu kontrol et
                 $checkExam = $pdo->prepare('SELECT * FROM "Exams" WHERE "ExamID" = :examId AND "CourseOpenID" = :courseId');
                 $checkExam->execute(['examId' => $examId, 'courseId' => $courseId]);
                 $exam = $checkExam->fetch();
-                
+
                 if (!$exam) {
                     throw new Exception('Bu sınavı düzenleme yetkiniz yok.');
                 }
-                
+
                 $filePath = $_FILES['grades_file']['tmp_name'];
                 $fileName = $_FILES['grades_file']['name'];
                 $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-                
+
                 $rows = [];
-                
+
                 // XLSX veya CSV'ye göre oku
                 if ($fileExt === 'xlsx' || $fileExt === 'xls') {
-                    // XLSX okuma
-                    if ($xlsx = SimpleXLSX::parse($filePath)) {
+                    // XLSX okuma - hataları bastır
+                    $oldErrorReporting = error_reporting(0);
+                    $xlsx = @SimpleXLSX::parse($filePath);
+                    error_reporting($oldErrorReporting);
+
+                    if ($xlsx) {
                         $rows = $xlsx->rows();
                     } else {
-                        throw new Exception('Excel dosyası okunamadı: ' . SimpleXLSX::parseError());
+                        $parseError = SimpleXLSX::parseError();
+                        throw new Exception('Excel dosyası okunamadı. Dosya formatını kontrol edin.' . ($parseError ? ' Detay: ' . $parseError : ''));
                     }
                 } else {
                     // CSV okuma
                     $file = fopen($filePath, 'r');
-                    
+
                     // BOM varsa atla
                     $bom = fread($file, 3);
-                    if ($bom !== chr(0xEF).chr(0xBB).chr(0xBF)) {
+                    if ($bom !== chr(0xEF) . chr(0xBB) . chr(0xBF)) {
                         rewind($file);
                     }
-                    
+
                     while (($row = fgetcsv($file, 0, ';')) !== false) {
                         if (count($row) < 2) {
                             $row = str_getcsv(implode(';', $row), ',');
@@ -312,14 +317,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     fclose($file);
                 }
-                
+
                 if (count($rows) < 2) {
                     throw new Exception('Dosyada yeterli veri yok.');
                 }
-                
+
                 // İlk satır başlık
                 $headers = $rows[0];
-                
+
                 // Hangi sütun hangi soruya karşılık geliyor?
                 $questionColumns = [];
                 foreach ($headers as $colIndex => $header) {
@@ -327,20 +332,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $questionColumns[$colIndex] = (int) $matches[1];
                     }
                 }
-                
+
+                // Sınavdaki aktif soruları bul
+                $examActiveQuestions = [];
+                for ($i = 1; $i <= 20; $i++) {
+                    if (isset($exam["Q{$i}_MaxScore"]) && $exam["Q{$i}_MaxScore"] > 0) {
+                        $examActiveQuestions[] = $i;
+                    }
+                }
+
+                // Soru sayısı kontrolü
+                $fileQuestionCount = count($questionColumns);
+                $examQuestionCount = count($examActiveQuestions);
+
+                if ($fileQuestionCount !== $examQuestionCount) {
+                    if ($fileQuestionCount < $examQuestionCount) {
+                        throw new Exception('Dosyadaki soru sayısı az. Beklenen: ' . $examQuestionCount . ', Dosyada: ' . $fileQuestionCount . '. Lütfen doğru şablonu kullanın.');
+                    } else {
+                        throw new Exception('Dosyadaki soru sayısı fazla. Beklenen: ' . $examQuestionCount . ', Dosyada: ' . $fileQuestionCount . '. Lütfen doğru şablonu kullanın.');
+                    }
+                }
+
                 $importCount = 0;
                 $errorCount = 0;
-                
+                $createdStudents = 0;
+                $skippedStudents = []; // Atlanan öğrencilerin listesi
+
                 // Veri satırlarını işle (ilk satır hariç)
                 for ($rowIndex = 1; $rowIndex < count($rows); $rowIndex++) {
                     $row = $rows[$rowIndex];
-                    
+
                     $studentId = trim($row[0] ?? '');
-                    
+                    $studentName = trim($row[1] ?? '');
+
                     if (empty($studentId) || !is_numeric($studentId)) {
                         continue;
                     }
-                    
+
                     // Bu öğrenci derste kayıtlı mı?
                     $findEnrollment = $pdo->prepare('
                         SELECT e."EnrollmentID" 
@@ -350,14 +378,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ');
                     $findEnrollment->execute(['studentId' => $studentId, 'courseId' => $courseId]);
                     $enrollment = $findEnrollment->fetch();
-                    
+
                     if (!$enrollment) {
-                        $errorCount++;
-                        continue;
+                        // Öğrenci derste kayıtlı değil, yeni kayıt oluştur
+                        if (!empty($studentName)) {
+                            // Öğrenci sistemde var mı?
+                            $checkStudent = $pdo->prepare('SELECT "StudentID" FROM "Students" WHERE "StudentID" = :studentId');
+                            $checkStudent->execute(['studentId' => $studentId]);
+                            $existingStudent = $checkStudent->fetch();
+
+                            if (!$existingStudent) {
+                                // Öğrenciyi oluştur
+                                $insertStudent = $pdo->prepare('INSERT INTO "Students" ("StudentID", "FullName") VALUES (:studentId, :fullName)');
+                                $insertStudent->execute(['studentId' => $studentId, 'fullName' => $studentName]);
+                            }
+
+                            // Derse kaydet
+                            $insertEnrollment = $pdo->prepare('INSERT INTO "Enrollments" ("StudentID", "CourseOpenID") VALUES (:studentId, :courseId)');
+                            $insertEnrollment->execute(['studentId' => $studentId, 'courseId' => $courseId]);
+
+                            // EnrollmentID'yi al
+                            $findEnrollment->execute(['studentId' => $studentId, 'courseId' => $courseId]);
+                            $enrollment = $findEnrollment->fetch();
+                            $createdStudents++;
+                        } else {
+                            // İsim yok, atlıyoruz
+                            $skippedStudents[] = $studentId . ' (isim eksik)';
+                            $errorCount++;
+                            continue;
+                        }
                     }
-                    
+
                     $enrollmentId = $enrollment['EnrollmentID'];
-                    
+
                     // Notları topla
                     $scores = [];
                     foreach ($questionColumns as $colIndex => $questionNum) {
@@ -365,24 +418,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $scores[$questionNum] = (int) $row[$colIndex];
                         }
                     }
-                    
+
                     if (empty($scores)) {
                         continue;
                     }
-                    
+
                     // Mevcut kayıt var mı?
                     $checkResult = $pdo->prepare('SELECT "ResultID" FROM "Exam_Results" WHERE "EnrollmentID" = :eid AND "ExamID" = :examId');
                     $checkResult->execute(['eid' => $enrollmentId, 'examId' => $examId]);
                     $existingResult = $checkResult->fetch();
-                    
+
                     $setClauses = [];
                     $params = [];
-                    
+
                     foreach ($scores as $qNum => $score) {
                         $setClauses[] = "\"Q{$qNum}\" = :q{$qNum}";
                         $params["q{$qNum}"] = $score;
                     }
-                    
+
                     if ($existingResult) {
                         $params['resultId'] = $existingResult['ResultID'];
                         $sql = 'UPDATE "Exam_Results" SET ' . implode(', ', $setClauses) . ' WHERE "ResultID" = :resultId';
@@ -392,31 +445,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $cols = ['"EnrollmentID"', '"ExamID"'];
                         $vals = [':enrollmentId', ':examId'];
                         $insertParams = ['enrollmentId' => $enrollmentId, 'examId' => $examId];
-                        
+
                         foreach ($scores as $qNum => $score) {
                             $cols[] = "\"Q{$qNum}\"";
                             $vals[] = ":q{$qNum}";
                             $insertParams["q{$qNum}"] = $score;
                         }
-                        
+
                         $sql = 'INSERT INTO "Exam_Results" (' . implode(', ', $cols) . ') VALUES (' . implode(', ', $vals) . ')';
                         $insertStmt = $pdo->prepare($sql);
                         $insertStmt->execute($insertParams);
                     }
-                    
+
                     $importCount++;
                 }
-                
+
                 $message = "{$importCount} öğrencinin notu başarıyla import edildi.";
-                if ($errorCount > 0) {
-                    $message .= " ({$errorCount} öğrenci derste kayıtlı olmadığı için atlandı.)";
+                if ($createdStudents > 0) {
+                    $message .= " ({$createdStudents} yeni öğrenci derse kaydedildi.)";
+                }
+                if ($errorCount > 0 && count($skippedStudents) > 0) {
+                    $message .= " Atlanan öğrenciler: " . implode(', ', $skippedStudents);
                 }
                 $messageType = 'success';
-                
+
                 // Verileri yenile
                 $stmtEnrolled->execute(['courseId' => $courseId]);
                 $enrolledStudents = $stmtEnrolled->fetchAll();
-                
+
             } catch (Exception $e) {
                 $message = 'Import hatası: ' . $e->getMessage();
                 $messageType = 'error';
@@ -481,321 +537,326 @@ foreach ($rawAllResults as $res) {
         <?php endif; ?>
 
         <!--  MEVCUT DASHBOARD -->
-            <div class="course-header">
-                <h2>
-                    <?= htmlspecialchars($course['CourseCode']) ?> -
-                    <?= htmlspecialchars($course['CourseName']) ?>
-                </h2>
-                <div class="course-meta">
-                    <span class="meta-item">📅
-                        <?= htmlspecialchars($course['Year'] . ' ' . $course['Term']) ?>
-                    </span>
-                    <span class="meta-item">🏫
-                        <?= htmlspecialchars($course['Department'] ?? '-') ?>
-                    </span>
-                    <span class="meta-item">📖
-                        <?= htmlspecialchars($course['Program'] ?? '-') ?>
-                    </span>
-                </div>
+        <div class="course-header">
+            <h2>
+                <?= htmlspecialchars($course['CourseCode']) ?> -
+                <?= htmlspecialchars($course['CourseName']) ?>
+            </h2>
+            <div class="course-meta">
+                <span class="meta-item">📅
+                    <?= htmlspecialchars($course['Year'] . ' ' . $course['Term']) ?>
+                </span>
+                <span class="meta-item">🏫
+                    <?= htmlspecialchars($course['Department'] ?? '-') ?>
+                </span>
+                <span class="meta-item">📖
+                    <?= htmlspecialchars($course['Program'] ?? '-') ?>
+                </span>
             </div>
+        </div>
 
-            <div class="card">
-                <h3>📊 Kredi Bilgileri</h3>
-                <div class="info-grid">
-                    <div class="info-item">
-                        <div class="info-label">Teorik</div>
-                        <div class="info-value">
-                            <?= htmlspecialchars($course['Teorik'] ?? '-') ?>
-                        </div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Uygulama</div>
-                        <div class="info-value">
-                            <?= htmlspecialchars($course['Uygulama'] ?? '-') ?>
-                        </div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Kredi</div>
-                        <div class="info-value">
-                            <?= htmlspecialchars($course['Credits'] ?? '-') ?>
-                        </div>
-                    </div>
-                    <div class="info-item">
-                        <div class="info-label">Sınıf</div>
-                        <div class="info-value">
-                            <?= htmlspecialchars($course['ClassLevel'] ?? '-') ?>
-                        </div>
+        <div class="card">
+            <h3>📊 Kredi Bilgileri</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Teorik</div>
+                    <div class="info-value">
+                        <?= htmlspecialchars($course['Teorik'] ?? '-') ?>
                     </div>
                 </div>
+                <div class="info-item">
+                    <div class="info-label">Uygulama</div>
+                    <div class="info-value">
+                        <?= htmlspecialchars($course['Uygulama'] ?? '-') ?>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Kredi</div>
+                    <div class="info-value">
+                        <?= htmlspecialchars($course['Credits'] ?? '-') ?>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Sınıf</div>
+                    <div class="info-value">
+                        <?= htmlspecialchars($course['ClassLevel'] ?? '-') ?>
+                    </div>
+                </div>
             </div>
+        </div>
 
-            <div class="card">
-                <h3>📝 Sınavlar</h3>
-                <?php if (count($exams) > 0): ?>
-                        <?php foreach ($exams as $exam): ?>
-                                <div class="exam-card" id="exam-<?= $exam['ExamID'] ?>">
-                                    <div class="exam-header">
-                                        <span class="exam-type"><?= htmlspecialchars($exam['ExamType']) ?></span>
-                                        <div class="exam-actions">
-                                            <span class="exam-date">📅 <?= htmlspecialchars($exam['ExamDate'] ?? '-') ?></span>
-                                            <button type="button" class="btn-icon btn-edit"
-                                                onclick="toggleEditForm(<?= $exam['ExamID'] ?>)">✏️</button>
-                                            <button type="submit" class="btn-icon btn-delete">🗑️</button>
-                                            </form>
-                                            <a href="?id=<?= $courseId ?>&mode=grade_entry&exam_id=<?= $exam['ExamID'] ?>#grade-entry"
-                                                class="btn-icon" style="text-decoration:none" title="Not Gir">📝</a>
-                                        </div>
+        <div class="card">
+            <h3>📝 Sınavlar</h3>
+            <?php if (count($exams) > 0): ?>
+                <?php foreach ($exams as $exam): ?>
+                    <div class="exam-card" id="exam-<?= $exam['ExamID'] ?>">
+                        <div class="exam-header">
+                            <span class="exam-type"><?= htmlspecialchars($exam['ExamType']) ?></span>
+                            <div class="exam-actions">
+                                <span class="exam-date">📅 <?= htmlspecialchars($exam['ExamDate'] ?? '-') ?></span>
+                                <button type="button" class="btn-icon btn-edit"
+                                    onclick="toggleEditForm(<?= $exam['ExamID'] ?>)">✏️</button>
+                                <button type="submit" class="btn-icon btn-delete">🗑️</button>
+                                </form>
+                                <a href="?id=<?= $courseId ?>&mode=grade_entry&exam_id=<?= $exam['ExamID'] ?>#grade-entry"
+                                    class="btn-icon" style="text-decoration:none" title="Not Gir">📝</a>
+                            </div>
+                        </div>
+                        <div class="exam-questions">
+                            <?php
+                            $totalScore = 0;
+                            $questionCount = 0;
+                            for ($i = 1; $i <= 20; $i++):
+                                $maxScore = $exam["Q{$i}_MaxScore"] ?? null;
+                                if ($maxScore !== null && $maxScore > 0):
+                                    $totalScore += $maxScore;
+                                    $questionCount++;
+                                    ?>
+                                    <span class="question-badge">S<?= $i ?>: <?= $maxScore ?> puan</span>
+                                <?php endif; endfor; ?>
+                        </div>
+                        <div class="exam-summary">
+                            <span>📊 <?= $questionCount ?> Soru</span>
+                            <span>📈 Toplam: <?= $totalScore ?> puan</span>
+                        </div>
+
+                        <!-- CSV Import/Export -->
+                        <div class="exam-import" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #ddd;">
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                <a href="download_template.php?id=<?= $courseId ?>&exam_id=<?= $exam['ExamID'] ?>"
+                                    class="btn-save-sm" style="text-decoration: none; font-size: 12px;">
+                                    📥 Şablon İndir
+                                </a>
+                                <form method="POST" enctype="multipart/form-data"
+                                    style="display: flex; gap: 8px; align-items: center;">
+                                    <input type="hidden" name="action" value="import_grades">
+                                    <input type="hidden" name="exam_id" value="<?= $exam['ExamID'] ?>">
+                                    <input type="file" name="grades_file" accept=".csv,.xlsx,.xls"
+                                        style="font-size: 12px; max-width: 200px;">
+                                    <button type="submit" class="btn-save-sm" style="font-size: 12px;">
+                                        📤 İçe Aktar
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Düzenleme Formu (gizli) -->
+                        <div class="edit-form" id="edit-form-<?= $exam['ExamID'] ?>" style="display:none">
+                            <form method="POST">
+                                <input type="hidden" name="action" value="update_exam">
+                                <input type="hidden" name="exam_id" value="<?= $exam['ExamID'] ?>">
+
+                                <div class="form-row">
+                                    <div class="form-group half">
+                                        <label>Sınav Tipi</label>
+                                        <select name="exam_type" required>
+                                            <option value="Final" <?= $exam['ExamType'] === 'Final' ? 'selected' : '' ?>>Final
+                                            </option>
+                                            <option value="Bütünleme" <?= $exam['ExamType'] === 'Bütünleme' ? 'selected' : '' ?>>
+                                                Bütünleme</option>
+                                            <option value="Vize" <?= $exam['ExamType'] === 'Vize' ? 'selected' : '' ?>>Vize
+                                            </option>
+                                            <option value="Quiz" <?= $exam['ExamType'] === 'Quiz' ? 'selected' : '' ?>>Quiz
+                                            </option>
+                                        </select>
                                     </div>
-                                    <div class="exam-questions">
-                                        <?php
-                                        $totalScore = 0;
-                                        $questionCount = 0;
-                                        for ($i = 1; $i <= 20; $i++):
-                                            $maxScore = $exam["Q{$i}_MaxScore"] ?? null;
-                                            if ($maxScore !== null && $maxScore > 0):
-                                                $totalScore += $maxScore;
-                                                $questionCount++;
-                                                ?>
-                                                        <span class="question-badge">S<?= $i ?>: <?= $maxScore ?> puan</span>
-                                                <?php endif; endfor; ?>
-                                    </div>
-                                    <div class="exam-summary">
-                                        <span>📊 <?= $questionCount ?> Soru</span>
-                                        <span>📈 Toplam: <?= $totalScore ?> puan</span>
-                                    </div>
-
-                                    <!-- CSV Import/Export -->
-                                    <div class="exam-import" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #ddd;">
-                                        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
-                                            <a href="download_template.php?id=<?= $courseId ?>&exam_id=<?= $exam['ExamID'] ?>" 
-                                               class="btn-save-sm" style="text-decoration: none; font-size: 12px;">
-                                                📥 Şablon İndir
-                                            </a>
-                                            <form method="POST" enctype="multipart/form-data" style="display: flex; gap: 8px; align-items: center;">
-                                                <input type="hidden" name="action" value="import_grades">
-                                                <input type="hidden" name="exam_id" value="<?= $exam['ExamID'] ?>">
-                                                <input type="file" name="grades_file" accept=".csv,.xlsx,.xls" 
-                                                       style="font-size: 12px; max-width: 200px;">
-                                                <button type="submit" class="btn-save-sm" style="font-size: 12px;">
-                                                    📤 İçe Aktar
-                                                </button>
-                                            </form>
-                                        </div>
-                                    </div>
-
-                                    <!-- Düzenleme Formu (gizli) -->
-                                    <div class="edit-form" id="edit-form-<?= $exam['ExamID'] ?>" style="display:none">
-                                        <form method="POST">
-                                            <input type="hidden" name="action" value="update_exam">
-                                            <input type="hidden" name="exam_id" value="<?= $exam['ExamID'] ?>">
-
-                                            <div class="form-row">
-                                                <div class="form-group half">
-                                                    <label>Sınav Tipi</label>
-                                                    <select name="exam_type" required>
-                                                        <option value="Final" <?= $exam['ExamType'] === 'Final' ? 'selected' : '' ?>>Final
-                                                        </option>
-                                                        <option value="Bütünleme" <?= $exam['ExamType'] === 'Bütünleme' ? 'selected' : '' ?>>
-                                                            Bütünleme</option>
-                                                        <option value="Vize" <?= $exam['ExamType'] === 'Vize' ? 'selected' : '' ?>>Vize
-                                                        </option>
-                                                        <option value="Quiz" <?= $exam['ExamType'] === 'Quiz' ? 'selected' : '' ?>>Quiz
-                                                        </option>
-                                                    </select>
-                                                </div>
-                                                <div class="form-group half">
-                                                    <label>Tarih</label>
-                                                    <input type="date" name="exam_date"
-                                                        value="<?= htmlspecialchars($exam['ExamDate'] ?? '') ?>">
-                                                </div>
-                                            </div>
-
-                                            <div class="questions-grid">
-                                                <?php for ($i = 1; $i <= 20; $i++): ?>
-                                                        <div class="question-input">
-                                                            <label>S<?= $i ?></label>
-                                                            <input type="number" name="q<?= $i ?>_max" min="0" max="100"
-                                                                value="<?= $exam["Q{$i}_MaxScore"] ?? '' ?>">
-                                                        </div>
-                                                <?php endfor; ?>
-                                            </div>
-
-                                            <div class="edit-actions">
-                                                <button type="submit" class="btn-save-sm">💾 Kaydet</button>
-                                                <button type="button" class="btn-cancel"
-                                                    onclick="toggleEditForm(<?= $exam['ExamID'] ?>)">İptal</button>
-                                            </div>
-                                        </form>
+                                    <div class="form-group half">
+                                        <label>Tarih</label>
+                                        <input type="date" name="exam_date"
+                                            value="<?= htmlspecialchars($exam['ExamDate'] ?? '') ?>">
                                     </div>
                                 </div>
-                        <?php endforeach; ?>
-                <?php else: ?>
-                        <p class="no-data">Bu ders için henüz sınav tanımlanmamış.</p>
-                <?php endif; ?>
-            </div>
 
-            <div class="card">
-                <h3>➕ Yeni Sınav Ekle</h3>
-                <form method="POST" action="">
-                    <input type="hidden" name="action" value="add_exam">
+                                <div class="questions-grid">
+                                    <?php for ($i = 1; $i <= 20; $i++): ?>
+                                        <div class="question-input">
+                                            <label>S<?= $i ?></label>
+                                            <input type="number" name="q<?= $i ?>_max" min="0" max="100"
+                                                value="<?= $exam["Q{$i}_MaxScore"] ?? '' ?>">
+                                        </div>
+                                    <?php endfor; ?>
+                                </div>
 
-                    <div class="form-row">
-                        <div class="form-group half">
-                            <label for="exam_type">Sınav Tipi *</label>
-                            <select id="exam_type" name="exam_type" required>
-                                <option value="">Seçiniz...</option>
-                                <option value="Final">Final</option>
-                                <option value="Bütünleme">Bütünleme</option>
-                                <option value="Vize">Vize</option>
-                                <option value="Quiz">Quiz</option>
-                            </select>
-                        </div>
-                        <div class="form-group half">
-                            <label for="exam_date">Sınav Tarihi</label>
-                            <input type="date" id="exam_date" name="exam_date">
+                                <div class="edit-actions">
+                                    <button type="submit" class="btn-save-sm">💾 Kaydet</button>
+                                    <button type="button" class="btn-cancel"
+                                        onclick="toggleEditForm(<?= $exam['ExamID'] ?>)">İptal</button>
+                                </div>
+                            </form>
                         </div>
                     </div>
+                <?php endforeach; ?>
+            <?php else: ?>
+                <p class="no-data">Bu ders için henüz sınav tanımlanmamış.</p>
+            <?php endif; ?>
+        </div>
 
-                    <div class="form-group">
-                        <label>Soru Puanları (sadece kullanılacak soruları doldurun)</label>
-                        <div class="questions-grid">
-                            <?php for ($i = 1; $i <= 20; $i++): ?>
-                                    <div class="question-input">
-                                        <label>S<?= $i ?></label>
-                                        <input type="number" name="q<?= $i ?>_max" min="0" max="100" placeholder="0">
-                                    </div>
-                            <?php endfor; ?>
-                        </div>
+        <div class="card">
+            <h3>➕ Yeni Sınav Ekle</h3>
+            <form method="POST" action="">
+                <input type="hidden" name="action" value="add_exam">
+
+                <div class="form-row">
+                    <div class="form-group half">
+                        <label for="exam_type">Sınav Tipi *</label>
+                        <select id="exam_type" name="exam_type" required>
+                            <option value="">Seçiniz...</option>
+                            <option value="Final">Final</option>
+                            <option value="Bütünleme">Bütünleme</option>
+                            <option value="Vize">Vize</option>
+                            <option value="Quiz">Quiz</option>
+                        </select>
                     </div>
+                    <div class="form-group half">
+                        <label for="exam_date">Sınav Tarihi</label>
+                        <input type="date" id="exam_date" name="exam_date">
+                    </div>
+                </div>
 
-                    <button type="submit" class="btn-save">➕ Sınav Ekle</button>
-                </form>
-            </div>
+                <div class="form-group">
+                    <label>Soru Puanları (sadece kullanılacak soruları doldurun)</label>
+                    <div class="questions-grid">
+                        <?php for ($i = 1; $i <= 20; $i++): ?>
+                            <div class="question-input">
+                                <label>S<?= $i ?></label>
+                                <input type="number" name="q<?= $i ?>_max" min="0" max="100" placeholder="0">
+                            </div>
+                        <?php endfor; ?>
+                    </div>
+                </div>
 
-            <!-- Öğrenci Listesi -->
-            <div class="card">
-                <h3>👥 Öğrenci Listesi (<?= count($enrolledStudents) ?> Öğrenci)</h3>
+                <button type="submit" class="btn-save">➕ Sınav Ekle</button>
+            </form>
+        </div>
 
-                <?php if (count($enrolledStudents) > 0): ?>
-                        <div class="table-responsive">
-                            <table class="students-table">
-                                <thead>
-                                    <tr>
-                                        <th>Öğrenci Adı</th>
-                                        <?php foreach ($exams as $exam): ?>
-                                            <th><?= htmlspecialchars($exam['ExamType']) ?></th>
-                                        <?php endforeach; ?>
-                                        <th>İşlem</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($enrolledStudents as $student): ?>
-                                            <tr>
-                                                <td>
-                                                    <div class="student-name">
-                                                <?= htmlspecialchars($student['FullName']) ?>
-                                                <span style="font-size: 0.85em; color: #666; font-weight: normal;">(<?= $student['StudentID'] ?>)</span>
-                                            </div>
-                                                    <div class="student-email"><?= htmlspecialchars($student['Email'] ?? '') ?></div>
-                                                </td>
-                                        <?php foreach ($exams as $exam):
-                                            $examId = $exam['ExamID'];
-                                            $results = $allResults[$student['EnrollmentID']][$examId] ?? [];
-                                            $totalScore = 0;
-                                            $hasScore = false;
-                                            for($k=1; $k<=20; $k++) {
-                                                if(isset($results["Q{$k}"]) && $results["Q{$k}"] !== null) {
-                                                    $totalScore += $results["Q{$k}"];
-                                                    $hasScore = true;
-                                                }
+        <!-- Öğrenci Listesi -->
+        <div class="card">
+            <h3>👥 Öğrenci Listesi (<?= count($enrolledStudents) ?> Öğrenci)</h3>
+
+            <?php if (count($enrolledStudents) > 0): ?>
+                <div class="table-responsive">
+                    <table class="students-table">
+                        <thead>
+                            <tr>
+                                <th>Öğrenci Adı</th>
+                                <?php foreach ($exams as $exam): ?>
+                                    <th><?= htmlspecialchars($exam['ExamType']) ?></th>
+                                <?php endforeach; ?>
+                                <th>İşlem</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($enrolledStudents as $student): ?>
+                                <tr>
+                                    <td>
+                                        <div class="student-name">
+                                            <?= htmlspecialchars($student['FullName']) ?>
+                                            <span
+                                                style="font-size: 0.85em; color: #666; font-weight: normal;">(<?= $student['StudentID'] ?>)</span>
+                                        </div>
+                                        <div class="student-email"><?= htmlspecialchars($student['Email'] ?? '') ?></div>
+                                    </td>
+                                    <?php foreach ($exams as $exam):
+                                        $examId = $exam['ExamID'];
+                                        $results = $allResults[$student['EnrollmentID']][$examId] ?? [];
+                                        $totalScore = 0;
+                                        $hasScore = false;
+                                        for ($k = 1; $k <= 20; $k++) {
+                                            if (isset($results["Q{$k}"]) && $results["Q{$k}"] !== null) {
+                                                $totalScore += $results["Q{$k}"];
+                                                $hasScore = true;
                                             }
+                                        }
                                         ?>
-                                            <td style="text-align: center;">
-                                                <?= $hasScore ? $totalScore : '-' ?>
-                                            </td>
-                                        <?php endforeach; ?>
-                                                <td>
-                                                    <button type="button" class="btn-icon btn-edit"
-                                                        onclick="toggleGradeForm(<?= $student['EnrollmentID'] ?>)">✏️</button>
-                                                </td>
-                                            </tr>
-                                            <!-- Not Düzenleme (Genel) -->
-                                            <tr class="grade-form-row" id="grade-form-<?= $student['EnrollmentID'] ?>" style="display:none">
-                                        <td colspan="<?= count($exams) + 2 ?>">
-                                                <form method="POST" class="inline-grade-form">
-                                                    <input type="hidden" name="action" value="update_student_grades">
-                                                    <input type="hidden" name="enrollment_id" value="<?= $student['EnrollmentID'] ?>">
-                                            
-                                                    <div class="grade-edit-container" style="padding: 10px;">
+                                        <td style="text-align: center;">
+                                            <?= $hasScore ? $totalScore : '-' ?>
+                                        </td>
+                                    <?php endforeach; ?>
+                                    <td>
+                                        <button type="button" class="btn-icon btn-edit"
+                                            onclick="toggleGradeForm(<?= $student['EnrollmentID'] ?>)">✏️</button>
+                                    </td>
+                                </tr>
+                                <!-- Not Düzenleme (Genel) -->
+                                <tr class="grade-form-row" id="grade-form-<?= $student['EnrollmentID'] ?>" style="display:none">
+                                    <td colspan="<?= count($exams) + 2 ?>">
+                                        <form method="POST" class="inline-grade-form">
+                                            <input type="hidden" name="action" value="update_student_grades">
+                                            <input type="hidden" name="enrollment_id" value="<?= $student['EnrollmentID'] ?>">
+
+                                            <div class="grade-edit-container" style="padding: 10px;">
 
 
-                                                        <!-- Sınavlar -->
-                                                        <?php foreach ($exams as $exam):
-                                                            $examId = $exam['ExamID'];
-                                                            $studentExamResult = $allResults[$student['EnrollmentID']][$examId] ?? [];
-                                                            $hasQuestions = false;
-                                                            // Sınavda en az bir soru var mı kontrol et
-                                                            for ($k = 1; $k <= 20; $k++)
-                                                                if (($exam["Q{$k}_MaxScore"] ?? 0) > 0)
-                                                                    $hasQuestions = true;
+                                                <!-- Sınavlar -->
+                                                <?php foreach ($exams as $exam):
+                                                    $examId = $exam['ExamID'];
+                                                    $studentExamResult = $allResults[$student['EnrollmentID']][$examId] ?? [];
+                                                    $hasQuestions = false;
+                                                    // Sınavda en az bir soru var mı kontrol et
+                                                    for ($k = 1; $k <= 20; $k++)
+                                                        if (($exam["Q{$k}_MaxScore"] ?? 0) > 0)
+                                                            $hasQuestions = true;
 
-                                                            if (!$hasQuestions)
-                                                                continue;
-                                                            ?>
-                                                                <div class="exam-grade-block" style="margin-bottom: 15px; background: #fff; padding: 10px; border-radius: 6px; border: 1px solid #eee;">
-                                                                    <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #555;">
-                                                                        <?= htmlspecialchars($exam['ExamType']) ?> 
-                                                                        <small class="text-muted">(<?= htmlspecialchars($exam['ExamDate'] ?? '-') ?>)</small>
-                                                                    </h4>
-                                                                    <div style="display: flex; flex-wrap: wrap; gap: 10px;">
-                                                                        <?php for ($i = 1; $i <= 20; $i++):
-                                                                            $maxScore = $exam["Q{$i}_MaxScore"] ?? null;
-                                                                            if ($maxScore !== null && $maxScore > 0):
-                                                                                $score = $studentExamResult["Q{$i}"] ?? '';
-                                                                                ?>
-                                                                                    <div style="display: flex; flex-direction: column; align-items: center;">
-                                                                                        <label style="font-size: 11px; color: #888;">S<?= $i ?> (<?= $maxScore ?>)</label>
-                                                                                        <input type="number" 
-                                                                                               name="scores[<?= $examId ?>][q][<?= $i ?>]" 
-                                                                                               value="<?= $score ?>"
-                                                                                               min="0" max="<?= $maxScore ?>"
-                                                                                               style="width: 50px; text-align: center; padding: 4px; border: 1px solid #ddd; border-radius: 4px;">
-                                                                                    </div>
-                                                                            <?php endif; endfor; ?>
+                                                    if (!$hasQuestions)
+                                                        continue;
+                                                    ?>
+                                                    <div class="exam-grade-block"
+                                                        style="margin-bottom: 15px; background: #fff; padding: 10px; border-radius: 6px; border: 1px solid #eee;">
+                                                        <h4 style="margin: 0 0 10px 0; font-size: 14px; color: #555;">
+                                                            <?= htmlspecialchars($exam['ExamType']) ?>
+                                                            <small
+                                                                class="text-muted">(<?= htmlspecialchars($exam['ExamDate'] ?? '-') ?>)</small>
+                                                        </h4>
+                                                        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+                                                            <?php for ($i = 1; $i <= 20; $i++):
+                                                                $maxScore = $exam["Q{$i}_MaxScore"] ?? null;
+                                                                if ($maxScore !== null && $maxScore > 0):
+                                                                    $score = $studentExamResult["Q{$i}"] ?? '';
+                                                                    ?>
+                                                                    <div
+                                                                        style="display: flex; flex-direction: column; align-items: center;">
+                                                                        <label style="font-size: 11px; color: #888;">S<?= $i ?>
+                                                                            (<?= $maxScore ?>)</label>
+                                                                        <input type="number" name="scores[<?= $examId ?>][q][<?= $i ?>]"
+                                                                            value="<?= $score ?>" min="0" max="<?= $maxScore ?>"
+                                                                            style="width: 50px; text-align: center; padding: 4px; border: 1px solid #ddd; border-radius: 4px;">
                                                                     </div>
-                                                                </div>
-                                                        <?php endforeach; ?>
-
-                                                        <div style="text-align: right; margin-top: 15px;">
-                                                            <button type="submit" class="btn-save-sm">💾 Değişiklikleri Kaydet</button>
-                                                            <button type="button" class="btn-cancel" onclick="toggleGradeForm(<?= $student['EnrollmentID'] ?>)">İptal</button>
+                                                                <?php endif; endfor; ?>
                                                         </div>
                                                     </div>
-                                                </form>
-                                            </td>
-                                            </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                <?php else: ?>
-                        <p class="no-data">Bu derse kayıtlı öğrenci bulunmuyor.</p>
-                <?php endif; ?>
-            </div>
+                                                <?php endforeach; ?>
 
-            <div class="card">
-                <h3>✏️ Ders Kaynakları Düzenleme</h3>
-                <form method="POST" action="">
-                    <input type="hidden" name="action" value="update_resources">
-                    <div class="form-group">
-                        <label for="resources">Kitap / Kaynak</label>
-                        <textarea id="resources" name="resources"
-                            placeholder="Kaynak ve materyalleri yazın..."><?= htmlspecialchars($course['Resources'] ?? '') ?></textarea>
-                    </div>
+                                                <div style="text-align: right; margin-top: 15px;">
+                                                    <button type="submit" class="btn-save-sm">💾 Değişiklikleri Kaydet</button>
+                                                    <button type="button" class="btn-cancel"
+                                                        onclick="toggleGradeForm(<?= $student['EnrollmentID'] ?>)">İptal</button>
+                                                </div>
+                                            </div>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php else: ?>
+                <p class="no-data">Bu derse kayıtlı öğrenci bulunmuyor.</p>
+            <?php endif; ?>
+        </div>
 
-                    <button type="submit" class="btn-save">💾 Kaydet</button>
-                </form>
-            </div>
+        <div class="card">
+            <h3>✏️ Ders Kaynakları Düzenleme</h3>
+            <form method="POST" action="">
+                <input type="hidden" name="action" value="update_resources">
+                <div class="form-group">
+                    <label for="resources">Kitap / Kaynak</label>
+                    <textarea id="resources" name="resources"
+                        placeholder="Kaynak ve materyalleri yazın..."><?= htmlspecialchars($course['Resources'] ?? '') ?></textarea>
+                </div>
+
+                <button type="submit" class="btn-save">💾 Kaydet</button>
+            </form>
+        </div>
 
     </div>
 </body>
