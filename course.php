@@ -508,7 +508,6 @@ foreach ($rawAllResults as $res) {
                                         <?php foreach ($exams as $exam): ?>
                                             <th><?= htmlspecialchars($exam['ExamType']) ?></th>
                                         <?php endforeach; ?>
-                                        <th>Harf</th>
                                         <th>İşlem</th>
                                     </tr>
                                 </thead>
@@ -536,20 +535,13 @@ foreach ($rawAllResults as $res) {
                                             </td>
                                         <?php endforeach; ?>
                                                 <td>
-                                                    <?php if ($student['LetterGrade']): ?>
-                                                            <span class="letter-grade"><?= htmlspecialchars($student['LetterGrade']) ?></span>
-                                                    <?php else: ?>
-                                                            -
-                                                    <?php endif; ?>
-                                                </td>
-                                                <td>
                                                     <button type="button" class="btn-icon btn-edit"
                                                         onclick="toggleGradeForm(<?= $student['EnrollmentID'] ?>)">✏️</button>
                                                 </td>
                                             </tr>
                                             <!-- Not Düzenleme (Genel) -->
                                             <tr class="grade-form-row" id="grade-form-<?= $student['EnrollmentID'] ?>" style="display:none">
-                                        <td colspan="<?= count($exams) + 3 ?>">
+                                        <td colspan="<?= count($exams) + 2 ?>">
                                                 <form method="POST" class="inline-grade-form">
                                                     <input type="hidden" name="action" value="update_student_grades">
                                                     <input type="hidden" name="enrollment_id" value="<?= $student['EnrollmentID'] ?>">
