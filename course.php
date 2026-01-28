@@ -249,12 +249,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                // Final Notunu da güncelle
-                if (isset($_POST['final_grade']) && $_POST['final_grade'] !== '') {
-                    $finalGrade = $_POST['final_grade'];
-                    $updateStmt = $pdo->prepare('UPDATE "Enrollments" SET "FinalGrade" = :finalGrade WHERE "EnrollmentID" = :enrollmentId');
-                    $updateStmt->execute(['finalGrade' => $finalGrade, 'enrollmentId' => $enrollmentId]);
-                }
+
 
                 $message = 'Notlar kaydedildi!';
                 $messageType = 'success';
@@ -550,13 +545,7 @@ foreach ($rawAllResults as $res) {
                                                     <input type="hidden" name="enrollment_id" value="<?= $student['EnrollmentID'] ?>">
                                             
                                                     <div class="grade-edit-container" style="padding: 10px;">
-                                                        <!-- Final Notu -->
-                                                        <div style="margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid #eee;">
-                                                            <label style="font-weight: 600;">Genel Final Notu:</label>
-                                                            <input type="number" name="final_grade" min="0" max="100" 
-                                                                value="<?= $student['FinalGrade'] ?? '' ?>"
-                                                                style="width: 80px; padding: 5px; margin-left: 10px; border-radius: 4px; border: 1px solid #ddd;">
-                                                        </div>
+
 
                                                         <!-- Sınavlar -->
                                                         <?php foreach ($exams as $exam):
