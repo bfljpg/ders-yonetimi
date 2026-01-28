@@ -500,7 +500,6 @@ foreach ($rawAllResults as $res) {
                                         <?php foreach ($exams as $exam): ?>
                                             <th><?= htmlspecialchars($exam['ExamType']) ?></th>
                                         <?php endforeach; ?>
-                                        <th>Final</th>
                                         <th>Harf</th>
                                         <th>İşlem</th>
                                     </tr>
@@ -528,8 +527,6 @@ foreach ($rawAllResults as $res) {
                                                 <?= $hasScore ? $totalScore : '-' ?>
                                             </td>
                                         <?php endforeach; ?>
-                                        <td><?= isset($student['FinalGrade']) && $student['FinalGrade'] !== null ? $student['FinalGrade'] : '-' ?>
-                                        </td>
                                                 <td>
                                                     <?php if ($student['LetterGrade']): ?>
                                                             <span class="letter-grade"><?= htmlspecialchars($student['LetterGrade']) ?></span>
@@ -544,7 +541,7 @@ foreach ($rawAllResults as $res) {
                                             </tr>
                                             <!-- Not Düzenleme (Genel) -->
                                             <tr class="grade-form-row" id="grade-form-<?= $student['EnrollmentID'] ?>" style="display:none">
-                                        <td colspan="<?= count($exams) + 4 ?>">
+                                        <td colspan="<?= count($exams) + 3 ?>">
                                                 <form method="POST" class="inline-grade-form">
                                                     <input type="hidden" name="action" value="update_student_grades">
                                                     <input type="hidden" name="enrollment_id" value="<?= $student['EnrollmentID'] ?>">
