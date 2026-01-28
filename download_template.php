@@ -106,7 +106,9 @@ foreach ($students as $student) {
 }
 
 // XLSX olarak indir
-$filename = $course['CourseCode'] . '_' . $exam['ExamType'] . '_Notlar.xlsx';
+// Departman adını dosya adına ekle (özel karakterleri temizle)
+$departmentName = preg_replace('/[^a-zA-Z0-9\p{L}]/u', '', $course['Department'] ?? 'Bilinmeyen');
+$filename = $course['CourseCode'] . '_' . $departmentName . '_' . $exam['ExamType'] . '_Notlar.xlsx';
 
 $xlsx = SimpleXLSXGen::fromArray($data);
 $xlsx->downloadAs($filename);
