@@ -8,6 +8,9 @@ if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
 }
 
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/SimpleXLSX.php';
+
+use Shuchkin\SimpleXLSX;
 
 // ID kontrolü
 if (!isset($_GET['id']) || empty($_GET['id'])) {
@@ -262,6 +265,166 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $messageType = 'error';
             }
         }
+    } elseif ($action === 'import_grades') {
+        // CSV/Excel'den not import etme
+        $examId = $_POST['exam_id'] ?? null;
+        
+        if ($examId && isset($_FILES['grades_file']) && $_FILES['grades_file']['error'] === UPLOAD_ERR_OK) {
+            try {
+                // Sınavın bu derse ait olduğunu kontrol et
+                $checkExam = $pdo->prepare('SELECT * FROM "Exams" WHERE "ExamID" = :examId AND "CourseOpenID" = :courseId');
+                $checkExam->execute(['examId' => $examId, 'courseId' => $courseId]);
+                $exam = $checkExam->fetch();
+                
+                if (!$exam) {
+                    throw new Exception('Bu sınavı düzenleme yetkiniz yok.');
+                }
+                
+                $filePath = $_FILES['grades_file']['tmp_name'];
+                $fileName = $_FILES['grades_file']['name'];
+                $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+                
+                $rows = [];
+                
+                // XLSX veya CSV'ye göre oku
+                if ($fileExt === 'xlsx' || $fileExt === 'xls') {
+                    // XLSX okuma
+                    if ($xlsx = SimpleXLSX::parse($filePath)) {
+                        $rows = $xlsx->rows();
+                    } else {
+                        throw new Exception('Excel dosyası okunamadı: ' . SimpleXLSX::parseError());
+                    }
+                } else {
+                    // CSV okuma
+                    $file = fopen($filePath, 'r');
+                    
+                    // BOM varsa atla
+                    $bom = fread($file, 3);
+                    if ($bom !== chr(0xEF).chr(0xBB).chr(0xBF)) {
+                        rewind($file);
+                    }
+                    
+                    while (($row = fgetcsv($file, 0, ';')) !== false) {
+                        if (count($row) < 2) {
+                            $row = str_getcsv(implode(';', $row), ',');
+                        }
+                        $rows[] = $row;
+                    }
+                    fclose($file);
+                }
+                
+                if (count($rows) < 2) {
+                    throw new Exception('Dosyada yeterli veri yok.');
+                }
+                
+                // İlk satır başlık
+                $headers = $rows[0];
+                
+                // Hangi sütun hangi soruya karşılık geliyor?
+                $questionColumns = [];
+                foreach ($headers as $colIndex => $header) {
+                    if (preg_match('/S(\d+)/i', $header, $matches)) {
+                        $questionColumns[$colIndex] = (int) $matches[1];
+                    }
+                }
+                
+                $importCount = 0;
+                $errorCount = 0;
+                
+                // Veri satırlarını işle (ilk satır hariç)
+                for ($rowIndex = 1; $rowIndex < count($rows); $rowIndex++) {
+                    $row = $rows[$rowIndex];
+                    
+                    $studentId = trim($row[0] ?? '');
+                    
+                    if (empty($studentId) || !is_numeric($studentId)) {
+                        continue;
+                    }
+                    
+                    // Bu öğrenci derste kayıtlı mı?
+                    $findEnrollment = $pdo->prepare('
+                        SELECT e."EnrollmentID" 
+                        FROM "Enrollments" e 
+                        JOIN "Students" s ON e."StudentID" = s."StudentID"
+                        WHERE s."StudentID" = :studentId AND e."CourseOpenID" = :courseId
+                    ');
+                    $findEnrollment->execute(['studentId' => $studentId, 'courseId' => $courseId]);
+                    $enrollment = $findEnrollment->fetch();
+                    
+                    if (!$enrollment) {
+                        $errorCount++;
+                        continue;
+                    }
+                    
+                    $enrollmentId = $enrollment['EnrollmentID'];
+                    
+                    // Notları topla
+                    $scores = [];
+                    foreach ($questionColumns as $colIndex => $questionNum) {
+                        if (isset($row[$colIndex]) && $row[$colIndex] !== '') {
+                            $scores[$questionNum] = (int) $row[$colIndex];
+                        }
+                    }
+                    
+                    if (empty($scores)) {
+                        continue;
+                    }
+                    
+                    // Mevcut kayıt var mı?
+                    $checkResult = $pdo->prepare('SELECT "ResultID" FROM "Exam_Results" WHERE "EnrollmentID" = :eid AND "ExamID" = :examId');
+                    $checkResult->execute(['eid' => $enrollmentId, 'examId' => $examId]);
+                    $existingResult = $checkResult->fetch();
+                    
+                    $setClauses = [];
+                    $params = [];
+                    
+                    foreach ($scores as $qNum => $score) {
+                        $setClauses[] = "\"Q{$qNum}\" = :q{$qNum}";
+                        $params["q{$qNum}"] = $score;
+                    }
+                    
+                    if ($existingResult) {
+                        $params['resultId'] = $existingResult['ResultID'];
+                        $sql = 'UPDATE "Exam_Results" SET ' . implode(', ', $setClauses) . ' WHERE "ResultID" = :resultId';
+                        $updateStmt = $pdo->prepare($sql);
+                        $updateStmt->execute($params);
+                    } else {
+                        $cols = ['"EnrollmentID"', '"ExamID"'];
+                        $vals = [':enrollmentId', ':examId'];
+                        $insertParams = ['enrollmentId' => $enrollmentId, 'examId' => $examId];
+                        
+                        foreach ($scores as $qNum => $score) {
+                            $cols[] = "\"Q{$qNum}\"";
+                            $vals[] = ":q{$qNum}";
+                            $insertParams["q{$qNum}"] = $score;
+                        }
+                        
+                        $sql = 'INSERT INTO "Exam_Results" (' . implode(', ', $cols) . ') VALUES (' . implode(', ', $vals) . ')';
+                        $insertStmt = $pdo->prepare($sql);
+                        $insertStmt->execute($insertParams);
+                    }
+                    
+                    $importCount++;
+                }
+                
+                $message = "{$importCount} öğrencinin notu başarıyla import edildi.";
+                if ($errorCount > 0) {
+                    $message .= " ({$errorCount} öğrenci derste kayıtlı olmadığı için atlandı.)";
+                }
+                $messageType = 'success';
+                
+                // Verileri yenile
+                $stmtEnrolled->execute(['courseId' => $courseId]);
+                $enrolledStudents = $stmtEnrolled->fetchAll();
+                
+            } catch (Exception $e) {
+                $message = 'Import hatası: ' . $e->getMessage();
+                $messageType = 'error';
+            }
+        } else {
+            $message = 'Dosya yükleme hatası. Lütfen CSV dosyası seçin.';
+            $messageType = 'error';
+        }
     }
 }
 
@@ -399,6 +562,25 @@ foreach ($rawAllResults as $res) {
                                     <div class="exam-summary">
                                         <span>📊 <?= $questionCount ?> Soru</span>
                                         <span>📈 Toplam: <?= $totalScore ?> puan</span>
+                                    </div>
+
+                                    <!-- CSV Import/Export -->
+                                    <div class="exam-import" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #ddd;">
+                                        <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                            <a href="download_template.php?id=<?= $courseId ?>&exam_id=<?= $exam['ExamID'] ?>" 
+                                               class="btn-save-sm" style="text-decoration: none; font-size: 12px;">
+                                                📥 Şablon İndir
+                                            </a>
+                                            <form method="POST" enctype="multipart/form-data" style="display: flex; gap: 8px; align-items: center;">
+                                                <input type="hidden" name="action" value="import_grades">
+                                                <input type="hidden" name="exam_id" value="<?= $exam['ExamID'] ?>">
+                                                <input type="file" name="grades_file" accept=".csv,.xlsx,.xls" 
+                                                       style="font-size: 12px; max-width: 200px;">
+                                                <button type="submit" class="btn-save-sm" style="font-size: 12px;">
+                                                    📤 İçe Aktar
+                                                </button>
+                                            </form>
+                                        </div>
                                     </div>
 
                                     <!-- Düzenleme Formu (gizli) -->
